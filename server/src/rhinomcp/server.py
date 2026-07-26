@@ -119,6 +119,9 @@ READONLY_RETRY_COMMANDS = {
 }
 
 
+CAPABILITIES_COMMAND = "describe_capabilities"
+
+
 class TransientRhinoConnectionError(ConnectionError):
     """A connected Rhino socket dropped while a command was in flight."""
 
@@ -147,6 +150,11 @@ class RhinoConnection:
         # interleave their write/read pairs and the wrong response gets attached
         # to the wrong request.
         self._send_lock = threading.Lock()
+        # Commands the plugin on the other end of this socket says it can preview.
+        # None means "not asked yet"; connecting and dropping both reset it, so an
+        # answer from one plugin is never reused for another.
+        self._dry_run_commands: set[str] | None = None
+        self._capabilities_lock = threading.Lock()
 
     def connect(self) -> bool:
         """Connect to the Rhino addon socket server"""
@@ -156,6 +164,7 @@ class RhinoConnection:
         try:
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.connect((self.host, self.port))
+            self._dry_run_commands = None
             logger.info(f"Connected to Rhino at {self.host}:{self.port}")
             return True
         except Exception as e:
@@ -172,6 +181,7 @@ class RhinoConnection:
                 logger.error(f"Error disconnecting from Rhino: {str(e)}")
             finally:
                 self.sock = None
+                self._dry_run_commands = None
 
     def _recv_exact(self, sock, num_bytes, buffer_size=8192):
         """Receive exactly num_bytes from sock.
@@ -228,8 +238,60 @@ class RhinoConnection:
     ) -> Dict[str, Any]:
         """Send a command to Rhino and return the response. Thread-safe: serialized
         across concurrent callers so request/response framing isn't interleaved."""
+        if (params or {}).get("dry_run"):
+            self._require_dry_run_support(command_type)
         with self._send_lock:
             return self._send_command_locked(command_type, params)
+
+    def _require_dry_run_support(self, command_type: str):
+        """Refuse a preview the connected plugin cannot give.
+
+        Server and plugin ship separately, so a new server can meet an old
+        plugin. That plugin drops the dry_run param it has never heard of, runs
+        the real boolean, and deletes the source objects, while the caller reads
+        the reply as a preview. So the check happens here, before the send, and
+        only an explicit yes lets the command through.
+        """
+        if command_type in self._dry_run_capable_commands():
+            return
+
+        raise Exception(
+            "The installed rhinomcp plugin does not report dry_run support for "
+            f"'{command_type}', so a preview would run as the real operation and "
+            "could delete the source objects. The command was not sent. Update "
+            "the plugin to match this server version, or retry without dry_run."
+        )
+
+    def _dry_run_capable_commands(self) -> set[str]:
+        """Commands this plugin advertises a dry_run preview for.
+
+        Read once per connection and cached, so a caller that never previews
+        pays nothing and one that does pays a single extra round trip. The fetch
+        sends no dry_run of its own, so it cannot re-enter the gate. Only an
+        answer that arrived is remembered, and it is taken at its word: a command
+        the list doesn't mention, or an entry without the field, is a real no. A
+        fetch that fails refuses the call in hand without being remembered, so a
+        dropped frame costs one preview rather than every preview left on this
+        connection.
+        """
+        with self._capabilities_lock:
+            if self._dry_run_commands is None:
+                try:
+                    capabilities = self.send_command(CAPABILITIES_COMMAND, {})
+                    advertised = {
+                        entry.get("name")
+                        for entry in capabilities.get("commands", [])
+                        if isinstance(entry, dict)
+                        and entry.get("supports_dry_run") is True
+                    }
+                except Exception as e:
+                    logger.warning(
+                        f"Could not read the plugin's capabilities ({str(e)}); "
+                        "refusing this dry_run, the next one will ask again."
+                    )
+                    return set()
+                self._dry_run_commands = advertised
+            return self._dry_run_commands
 
     def _send_command_locked(
         self, command_type: str, params: Dict[str, Any] = {}

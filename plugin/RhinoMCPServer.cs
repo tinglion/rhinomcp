@@ -456,8 +456,25 @@ namespace RhinoMCPPlugin
                 };
             }
 
+            // dry_run is a preview: only commands that declare SupportsDryRun know
+            // how to honor it. Reject it on any other command up front, before an
+            // undo record or snapshot, so a stray flag can never suppress undo
+            // while the handler still mutates the document.
+            bool dryRunRequested = parameters["dry_run"]?.ToObject<bool>() ?? false;
+            if (dryRunRequested && !entry.SupportsDryRun)
+            {
+                return new JObject
+                {
+                    ["status"] = "error",
+                    ["message"] = $"Command {cmdType} does not support dry_run"
+                };
+            }
+
             var doc = RhinoDoc.ActiveDoc;
-            bool needsUndo = !entry.ReadOnly;
+            // A supported dry_run previews its result and touches nothing, so it
+            // opens no undo record; needsUndo also gates the perception blocks, so
+            // a preview reports no _delta or _health, which is correct.
+            bool needsUndo = !entry.ReadOnly && !(dryRunRequested && entry.SupportsDryRun);
 
             // A change-delta or health report only makes sense for a mutating
             // command, and only when the client asked for it. Snapshot the

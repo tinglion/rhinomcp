@@ -17,7 +17,8 @@ def describe_capabilities(ctx: Context) -> Dict[str, Any]:
     Returns:
     - version: the plugin version
     - command_count: how many commands the server handles
-    - commands: a list of {name, read_only}, sorted by name
+    - commands: a list of {name, read_only, supports_dry_run}, sorted by name.
+      supports_dry_run is absent on plugins older than the flag; read that as no.
     - perception: the opt-in envelope flags (include_delta, include_health) and
       what each attaches to a mutating command's result
     """

@@ -187,6 +187,9 @@ def validate_response(command_type: str, response: Dict[str, Any], raise_on_erro
         "execute_rhinoscript_python_code": "execute_script_result.json",
         "capture_viewport": "capture_viewport_result.json",
         "describe_capabilities": "capabilities.json",
+        "boolean_union": "boolean_result.json",
+        "boolean_difference": "boolean_result.json",
+        "boolean_intersection": "boolean_result.json",
     }
 
     schema_name = response_schema_map.get(command_type)

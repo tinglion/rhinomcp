@@ -250,6 +250,192 @@ class TestConcurrencySafety:
         conn._send_lock.release()
 
 
+class TestDryRunCapabilityGate:
+    """A dry_run only goes out to a plugin that says it can preview that command.
+    A plugin from before the flag existed ignores it and runs the real operation,
+    deleting the sources, so every answer short of an explicit yes has to read as
+    no and the command must not leave the client."""
+
+    IDS = [
+        "12345678-1234-1234-1234-123456789012",
+        "87654321-4321-4321-4321-210987654321",
+    ]
+
+    def _capabilities(self, commands):
+        return frame(json.dumps({
+            "status": "success",
+            "result": {
+                "version": "0.0.0-test",
+                "command_count": len(commands),
+                "commands": commands,
+                "perception": {"description": "none", "envelope_flags": []},
+            },
+        }).encode("utf-8"))
+
+    def _preview(self):
+        return frame(json.dumps({
+            "status": "success",
+            "result": {
+                "dry_run": True,
+                "would_succeed": True,
+                "count": 1,
+                "results": [{"valid": True, "is_solid": True, "volume": 8.0,
+                             "area": 24.0, "bounding_box": [[0, 0, 0], [2, 2, 2]]}],
+                "message": "Boolean union would create 1 object(s)",
+            },
+        }).encode("utf-8"))
+
+    def _connected(self, mock_socket_class, wire):
+        from rhinomcp.server import RhinoConnection
+
+        mock_sock = MagicMock()
+        mock_sock.recv.side_effect = buffered_recv(wire)
+        mock_socket_class.return_value = mock_sock
+
+        conn = RhinoConnection(host="127.0.0.1", port=1999)
+        conn.connect()
+        return conn, mock_sock
+
+    @patch("socket.socket")
+    def test_refused_when_the_plugin_has_no_describe_capabilities(self, mock_socket_class):
+        """The oldest case: a plugin that doesn't even answer the question."""
+        unknown = frame(json.dumps({
+            "status": "error",
+            "message": "Unknown command type: describe_capabilities",
+        }).encode("utf-8"))
+        conn, mock_sock = self._connected(mock_socket_class, unknown)
+
+        with pytest.raises(Exception, match="does not report dry_run support"):
+            conn.send_command(
+                "boolean_union", {"object_ids": self.IDS, "dry_run": True}
+            )
+
+        assert mock_sock.sendall.call_count == 1
+
+    @patch("socket.socket")
+    def test_refused_when_the_command_is_absent_from_the_list(self, mock_socket_class):
+        conn, mock_sock = self._connected(
+            mock_socket_class,
+            self._capabilities([
+                {"name": "create_object", "read_only": False, "supports_dry_run": False},
+            ]),
+        )
+
+        with pytest.raises(Exception, match="does not report dry_run support"):
+            conn.send_command(
+                "boolean_union", {"object_ids": self.IDS, "dry_run": True}
+            )
+
+        assert mock_sock.sendall.call_count == 1
+
+    @patch("socket.socket")
+    def test_refused_when_the_entry_omits_the_field(self, mock_socket_class):
+        """An older plugin lists the command but says nothing about previews."""
+        conn, mock_sock = self._connected(
+            mock_socket_class,
+            self._capabilities([{"name": "boolean_union", "read_only": False}]),
+        )
+
+        with pytest.raises(Exception, match="does not report dry_run support"):
+            conn.send_command(
+                "boolean_union", {"object_ids": self.IDS, "dry_run": True}
+            )
+
+        assert mock_sock.sendall.call_count == 1
+
+    @patch("socket.socket")
+    def test_sent_when_the_plugin_advertises_the_command(self, mock_socket_class):
+        conn, mock_sock = self._connected(
+            mock_socket_class,
+            self._capabilities([
+                {"name": "boolean_union", "read_only": False, "supports_dry_run": True},
+            ]) + self._preview(),
+        )
+
+        result = conn.send_command(
+            "boolean_union", {"object_ids": self.IDS, "dry_run": True}
+        )
+
+        assert result["dry_run"] is True
+        assert mock_sock.sendall.call_count == 2
+
+    @patch("socket.socket")
+    def test_a_command_without_dry_run_never_asks(self, mock_socket_class):
+        """Nothing changes for callers who don't preview: no lookup, no extra
+        round trip."""
+        committed = frame(json.dumps({
+            "status": "success",
+            "result": {"result_ids": [self.IDS[0]], "count": 1,
+                       "message": "Boolean union created 1 object(s)"},
+        }).encode("utf-8"))
+        conn, mock_sock = self._connected(mock_socket_class, committed)
+
+        conn.send_command("boolean_union", {"object_ids": self.IDS})
+
+        assert mock_sock.sendall.call_count == 1
+        assert conn._dry_run_commands is None
+
+    @patch("socket.socket")
+    def test_a_failed_probe_is_not_remembered(self, mock_socket_class):
+        """A blip while asking is not an answer. It refuses the preview in hand,
+        but the next one asks again instead of the connection being stuck on
+        "update the plugin" for a socket that merely hiccuped."""
+        from rhinomcp.server import RhinoConnection
+
+        serve = buffered_recv(
+            self._capabilities([
+                {"name": "boolean_union", "read_only": False, "supports_dry_run": True},
+            ]) + self._preview()
+        )
+        reads = []
+
+        def recv(n):
+            reads.append(n)
+            if len(reads) == 1:
+                raise socket.timeout("timed out")
+            return serve(n)
+
+        mock_sock = MagicMock()
+        mock_sock.recv.side_effect = recv
+        mock_socket_class.return_value = mock_sock
+
+        conn = RhinoConnection(host="127.0.0.1", port=1999)
+        conn.connect()
+
+        with pytest.raises(Exception, match="does not report dry_run support"):
+            conn.send_command(
+                "boolean_union", {"object_ids": self.IDS, "dry_run": True}
+            )
+        assert conn._dry_run_commands is None
+
+        result = conn.send_command(
+            "boolean_union", {"object_ids": self.IDS, "dry_run": True}
+        )
+
+        assert result["dry_run"] is True
+        assert conn._dry_run_commands == {"boolean_union"}
+
+    @patch("socket.socket")
+    def test_a_dropped_connection_drops_the_answer(self, mock_socket_class):
+        """The next socket may reach a different plugin, so the cache dies with
+        the old one."""
+        capabilities = self._capabilities([
+            {"name": "boolean_union", "read_only": False, "supports_dry_run": True},
+        ])
+        conn, mock_sock = self._connected(
+            mock_socket_class,
+            capabilities + self._preview() + capabilities + self._preview(),
+        )
+
+        conn.send_command("boolean_union", {"object_ids": self.IDS, "dry_run": True})
+        conn.disconnect()
+        assert conn._dry_run_commands is None
+
+        conn.send_command("boolean_union", {"object_ids": self.IDS, "dry_run": True})
+
+        assert mock_sock.sendall.call_count == 4
+
+
 class TestRuntimeValidation:
     """Pre-flight schema validation modes."""
 

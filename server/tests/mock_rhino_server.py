@@ -25,12 +25,20 @@ from typing import Dict, Any, Optional
 class MockRhinoServer:
     """A mock Rhino server for testing MCP commands."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 1999):
+    def __init__(self, host: str = "127.0.0.1", port: int = 1999,
+                 legacy_plugin: bool = False):
         self.host = host
         self.port = port
         self.server_socket: Optional[socket.socket] = None
         self.running = False
         self.thread: Optional[threading.Thread] = None
+        # Stand in for a plugin built before dry_run existed: it never advertises
+        # supports_dry_run, and it drops the flag it doesn't know about instead of
+        # previewing, so the boolean handlers mutate the document for real.
+        self.legacy_plugin = legacy_plugin
+        self._handler_table: Optional[Dict[str, Any]] = None
+        # Command types received, in order, so a test can assert what was sent.
+        self.received_commands: list = []
 
         # Mock document state
         self.objects: Dict[str, Dict[str, Any]] = {}
@@ -177,12 +185,20 @@ class MockRhinoServer:
         "undo", "redo", "create_layer", "delete_layer",
     }
 
-    def _process_command(self, command: Dict[str, Any]) -> Dict[str, Any]:
-        """Process a command and return a response."""
-        cmd_type = command.get("type", "")
-        params = command.get("params", {})
+    # Commands whose handler honors a params-level dry_run preview, mirroring the
+    # plugin's [McpCommand(..., SupportsDryRun = true)]. dry_run on anything else
+    # is rejected; a dry_run on one of these previews and carries no delta/health.
+    SUPPORTS_DRY_RUN = {
+        "boolean_union", "boolean_difference", "boolean_intersection",
+    }
 
-        handlers = {
+    def _handlers(self) -> Dict[str, Any]:
+        """The mock's command surface, built once. describe_capabilities reports
+        it, the same way the plugin reports its reflected dispatch table."""
+        if self._handler_table is not None:
+            return self._handler_table
+
+        self._handler_table = {
             "get_document_summary": self._get_document_summary,
             "get_objects": self._get_objects,
             "create_object": self._create_object,
@@ -217,20 +233,41 @@ class MockRhinoServer:
             "offset_curve": self._offset_curve,
             "pipe": self._pipe,
         }
+        return self._handler_table
 
-        handler = handlers.get(cmd_type)
+    def _process_command(self, command: Dict[str, Any]) -> Dict[str, Any]:
+        """Process a command and return a response."""
+        cmd_type = command.get("type", "")
+        params = command.get("params", {})
+        self.received_commands.append(cmd_type)
+
+        handler = self._handlers().get(cmd_type)
         if not handler:
             return {"status": "error", "message": f"Unknown command: {cmd_type}"}
 
+        if self.legacy_plugin:
+            # An old plugin has no notion of dry_run, so it drops the unknown
+            # param and runs the command for real.
+            params = {k: v for k, v in params.items() if k != "dry_run"}
+
+        # dry_run is a preview only the declaring commands honor; reject it on any
+        # other command up front, exactly as the plugin dispatcher does.
+        dry_run_requested = bool(params.get("dry_run"))
+        if dry_run_requested and cmd_type not in self.SUPPORTS_DRY_RUN:
+            return {"status": "error", "message": f"Command {cmd_type} does not support dry_run"}
+
         try:
             # Mirror the plugin: when the client asks for a delta, snapshot the
-            # object id set around a mutating handler and attach what changed.
+            # object id set around a mutating handler and attach what changed. A
+            # supported dry_run previews the result and changes nothing, so it
+            # carries no delta or health.
+            is_preview = dry_run_requested and cmd_type in self.SUPPORTS_DRY_RUN
             track_delta = bool(command.get("include_delta")) and (
                 cmd_type in self._MUTATING_COMMANDS
-            )
+            ) and not is_preview
             track_health = bool(command.get("include_health")) and (
                 cmd_type in self._MUTATING_COMMANDS
-            )
+            ) and not is_preview
             before = set(self.objects.keys()) if (track_delta or track_health) else None
             result = handler(params)
             if isinstance(result, dict) and (track_delta or track_health):
@@ -875,6 +912,14 @@ class MockRhinoServer:
         if len(object_ids) < 2:
             raise Exception("Boolean union requires at least 2 objects")
 
+        if params.get("dry_run"):
+            return self._boolean_prediction(
+                "Boolean union would create 1 object(s)",
+                [[-2, -2, -2], [2, 2, 2]],
+                volume=64.0,
+                area=96.0,
+            )
+
         result_id = str(uuid.uuid4())
         result = {
             "id": result_id,
@@ -901,6 +946,14 @@ class MockRhinoServer:
         if not base_id or not subtract_ids:
             raise Exception("Boolean difference requires base_id and subtract_ids")
 
+        if params.get("dry_run"):
+            return self._boolean_prediction(
+                "Boolean difference would create 1 object(s)",
+                [[-1, -1, -1], [1, 1, 1]],
+                volume=8.0,
+                area=24.0,
+            )
+
         result_id = str(uuid.uuid4())
         result = {
             "id": result_id,
@@ -926,6 +979,14 @@ class MockRhinoServer:
         if len(object_ids) < 2:
             raise Exception("Boolean intersection requires at least 2 objects")
 
+        if params.get("dry_run"):
+            return self._boolean_prediction(
+                "Boolean intersection would create 1 object(s)",
+                [[-0.5, -0.5, -0.5], [0.5, 0.5, 0.5]],
+                volume=1.0,
+                area=6.0,
+            )
+
         result_id = str(uuid.uuid4())
         result = {
             "id": result_id,
@@ -943,6 +1004,27 @@ class MockRhinoServer:
 
         self.objects[result_id] = result
         return {"result_ids": [result_id], "count": 1, "message": "Boolean intersection created 1 object(s)"}
+
+    def _boolean_prediction(self, message: str, bounding_box: list, volume: float, area: float) -> Dict:
+        """Mirror the plugin's dry_run response: the metrics a real run would
+        produce, with no object added or removed. The mock holds no real
+        geometry, so the numbers are fixed to the bounding box the matching
+        handler uses; this exercises the prediction wiring and shape."""
+        return {
+            "dry_run": True,
+            "would_succeed": True,
+            "count": 1,
+            "results": [
+                {
+                    "valid": True,
+                    "is_solid": True,
+                    "volume": volume,
+                    "area": area,
+                    "bounding_box": bounding_box,
+                }
+            ],
+            "message": message,
+        }
 
 
     def _run_command(self, params: Dict) -> Dict:
@@ -1108,17 +1190,21 @@ class MockRhinoServer:
         return {"count": len(matched), "commands": matched}
 
     def _describe_capabilities(self, params: Dict) -> Dict:
-        """Representative capabilities shape. The real plugin reflects its live
-        dispatch table; the mock returns a fixed, well-formed sample so the
-        wiring and the response shape can be exercised."""
+        """Self-description built from the mock's own handler table, the way the
+        real plugin builds it from its live dispatch table. In legacy_plugin mode
+        supports_dry_run is left out of every entry, which is all an old plugin's
+        answer can say."""
+        commands = []
+        for name in sorted(self._handlers()):
+            entry = {"name": name, "read_only": name not in self._MUTATING_COMMANDS}
+            if not self.legacy_plugin:
+                entry["supports_dry_run"] = name in self.SUPPORTS_DRY_RUN
+            commands.append(entry)
+
         return {
             "version": "0.0.0-mock",
-            "command_count": 3,
-            "commands": [
-                {"name": "create_object", "read_only": False},
-                {"name": "delete_object", "read_only": False},
-                {"name": "get_document_summary", "read_only": True},
-            ],
+            "command_count": len(commands),
+            "commands": commands,
             "perception": {
                 "description": "Mutating commands accept opt-in envelope flags.",
                 "envelope_flags": [

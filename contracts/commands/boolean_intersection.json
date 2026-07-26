@@ -13,7 +13,12 @@
       "description": "GUIDs of solids to intersect (at least 2)"
     },
     "delete_sources": { "type": "boolean", "default": true },
-    "name": { "type": "string" }
+    "name": { "type": "string" },
+    "dry_run": {
+      "type": "boolean",
+      "default": false,
+      "description": "Preview the result and its metrics without modifying the document"
+    }
   },
   "required": ["object_ids"],
   "additionalProperties": false

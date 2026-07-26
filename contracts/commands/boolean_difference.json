@@ -14,7 +14,12 @@
       "description": "GUIDs of solids to subtract"
     },
     "delete_sources": { "type": "boolean", "default": true },
-    "name": { "type": "string" }
+    "name": { "type": "string" },
+    "dry_run": {
+      "type": "boolean",
+      "default": false,
+      "description": "Preview the result and its metrics without modifying the document"
+    }
   },
   "required": ["base_id", "subtract_ids"],
   "additionalProperties": false

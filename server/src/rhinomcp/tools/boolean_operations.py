@@ -9,6 +9,7 @@ def boolean_union(
     object_ids: List[str],
     delete_sources: bool = True,
     name: Optional[str] = None,
+    dry_run: bool = False,
 ) -> str:
     """
     Perform a boolean union on multiple solid objects, combining them into one.
@@ -17,6 +18,7 @@ def boolean_union(
     - object_ids: List of object IDs (GUIDs) to union together (minimum 2)
     - delete_sources: Whether to delete the source objects after union (default: True)
     - name: Optional name for the resulting object
+    - dry_run: Preview the result and its metrics without modifying the document (default: False)
 
     Returns:
     A message indicating the result of the operation.
@@ -28,15 +30,18 @@ def boolean_union(
         params = {
             "object_ids": object_ids,
             "delete_sources": delete_sources,
+            "dry_run": dry_run,
         }
         if name:
             params["name"] = name
 
         result = rhino.send_command("boolean_union", params)
+        if dry_run:
+            return f"{result['message']}. Predicted results: {result['results']}"
         return f"{result['message']}. Result IDs: {result['result_ids']}"
     except Exception as e:
         logger.error(f"Error in boolean union: {str(e)}")
-        return f"Error in boolean union: {str(e)}"
+        raise
 
 
 @mcp.tool()
@@ -46,6 +51,7 @@ def boolean_difference(
     subtract_ids: List[str],
     delete_sources: bool = True,
     name: Optional[str] = None,
+    dry_run: bool = False,
 ) -> str:
     """
     Perform a boolean difference (subtraction) - subtract objects from a base object.
@@ -55,6 +61,7 @@ def boolean_difference(
     - subtract_ids: List of object IDs (GUIDs) to subtract from the base
     - delete_sources: Whether to delete the source objects after operation (default: True)
     - name: Optional name for the resulting object
+    - dry_run: Preview the result and its metrics without modifying the document (default: False)
 
     Returns:
     A message indicating the result of the operation.
@@ -67,15 +74,18 @@ def boolean_difference(
             "base_id": base_id,
             "subtract_ids": subtract_ids,
             "delete_sources": delete_sources,
+            "dry_run": dry_run,
         }
         if name:
             params["name"] = name
 
         result = rhino.send_command("boolean_difference", params)
+        if dry_run:
+            return f"{result['message']}. Predicted results: {result['results']}"
         return f"{result['message']}. Result IDs: {result['result_ids']}"
     except Exception as e:
         logger.error(f"Error in boolean difference: {str(e)}")
-        return f"Error in boolean difference: {str(e)}"
+        raise
 
 
 @mcp.tool()
@@ -84,6 +94,7 @@ def boolean_intersection(
     object_ids: List[str],
     delete_sources: bool = True,
     name: Optional[str] = None,
+    dry_run: bool = False,
 ) -> str:
     """
     Perform a boolean intersection - keep only the overlapping volume of objects.
@@ -92,6 +103,7 @@ def boolean_intersection(
     - object_ids: List of object IDs (GUIDs) to intersect (minimum 2)
     - delete_sources: Whether to delete the source objects after operation (default: True)
     - name: Optional name for the resulting object
+    - dry_run: Preview the result and its metrics without modifying the document (default: False)
 
     Returns:
     A message indicating the result of the operation.
@@ -103,12 +115,15 @@ def boolean_intersection(
         params = {
             "object_ids": object_ids,
             "delete_sources": delete_sources,
+            "dry_run": dry_run,
         }
         if name:
             params["name"] = name
 
         result = rhino.send_command("boolean_intersection", params)
+        if dry_run:
+            return f"{result['message']}. Predicted results: {result['results']}"
         return f"{result['message']}. Result IDs: {result['result_ids']}"
     except Exception as e:
         logger.error(f"Error in boolean intersection: {str(e)}")
-        return f"Error in boolean intersection: {str(e)}"
+        raise

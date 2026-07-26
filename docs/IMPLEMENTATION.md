@@ -285,10 +285,22 @@ invalid result can otherwise land silently. See
 ### Capabilities (Self-Description)
 
 `describe_capabilities` returns what this server itself can do: every command it
-handles with a `read_only` flag, the perception envelope flags it honors, and the
-plugin version. The command list is built from the live dispatch table
-(`GetDispatchTable`), so it can't drift from what the server actually accepts;
-adding a `[McpCommand]` makes it appear automatically.
+handles with a `read_only` and a `supports_dry_run` flag, the perception envelope
+flags it honors, and the plugin version. The command list is built from the live
+dispatch table (`GetDispatchTable`), so it can't drift from what the server
+actually accepts; adding a `[McpCommand]` makes it appear automatically, and both
+flags are read off the same attribute the dispatcher gates on.
+
+The Python server uses that answer as a version gate. Server and plugin ship
+separately, so a server that knows `dry_run` can end up talking to a plugin that
+doesn't: the old plugin drops the flag it has never heard of, runs the real
+boolean and deletes the source objects, while the caller reads the reply as a
+preview. A command carrying `dry_run` is therefore only sent once the plugin has
+advertised `supports_dry_run` for that exact command. The answer is read once per
+connection and cached until the socket drops, and every uncertain case (no
+`describe_capabilities` at all, a failed read, a command the list doesn't
+mention, a missing field) counts as unsupported. Commands without `dry_run` never
+trigger the lookup and are sent exactly as before.
 
 This is deliberately distinct from `get_commands`, which lists Rhino's own
 application commands (`Box`, `Circle`, ...) for use with `run_command`.

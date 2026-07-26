@@ -27,6 +27,10 @@
           "read_only": {
             "type": "boolean",
             "description": "True if the command does not mutate the document (no undo record)."
+          },
+          "supports_dry_run": {
+            "type": "boolean",
+            "description": "True if the command honors a dry_run preview. Optional: a plugin from before dry_run existed omits it, and a client must read absent as false rather than assume support."
           }
         },
         "required": ["name", "read_only"],

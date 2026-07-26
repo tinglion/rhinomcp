@@ -21,6 +21,15 @@ public sealed class McpCommandAttribute : Attribute
     /// </summary>
     public bool ReadOnly { get; set; }
 
+    /// <summary>
+    /// If true, the handler honors a params-level dry_run flag by previewing its
+    /// result without mutating the document. The dispatcher rejects dry_run on any
+    /// command that does not set this, and for one that does it skips the undo
+    /// record and the perception blocks since a preview changes nothing.
+    /// Settable for named-argument syntax: [McpCommand("foo", SupportsDryRun = true)].
+    /// </summary>
+    public bool SupportsDryRun { get; set; }
+
     public McpCommandAttribute(string name)
     {
         Name = name;

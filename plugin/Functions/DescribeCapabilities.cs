@@ -8,16 +8,19 @@ namespace RhinoMCPPlugin.Functions;
 public partial class RhinoMCPFunctions
 {
     /// <summary>
-    /// Self-description of what this MCP server can do: every command it handles
-    /// and whether that command is read-only, plus the perception envelope flags
-    /// it honors and the plugin version. Read-only.
+    /// Self-description of what this MCP server can do: every command it handles,
+    /// whether that command is read-only and whether it honors a dry_run preview,
+    /// plus the perception envelope flags it honors and the plugin version.
+    /// Read-only.
     ///
     /// This is distinct from get_commands, which lists Rhino's own application
     /// commands (Box, Circle, ...) for use with run_command. describe_capabilities
     /// lists the MCP command surface itself, so an agent can discover what it can
     /// send instead of guessing. The command list is the live dispatch table
     /// (GetDispatchTable), so it never drifts from what the server actually
-    /// accepts: add a [McpCommand] and it appears here automatically.
+    /// accepts: add a [McpCommand] and it appears here automatically. The flags
+    /// come off the same attribute the dispatcher gates on, so a client can ask
+    /// what this plugin supports before sending a command it might mishandle.
     ///
     /// Parameters are deliberately not included. The handlers take an untyped
     /// JObject, so there is no parameter schema to reflect at runtime; the
@@ -35,7 +38,8 @@ public partial class RhinoMCPFunctions
             commands.Add(new JObject
             {
                 ["name"] = name,
-                ["read_only"] = table[name].ReadOnly
+                ["read_only"] = table[name].ReadOnly,
+                ["supports_dry_run"] = table[name].SupportsDryRun
             });
         }
 

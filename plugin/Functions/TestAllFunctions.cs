@@ -1093,9 +1093,11 @@ public partial class RhinoMCPFunctions
         }
 
         // Test: describe_capabilities reports the live dispatch table with
-        // read-only flags, the perception envelope flags, and the version. The
-        // command list is reflection-driven, so it must include the commands we
-        // exercise here and describe_capabilities itself, with correct read_only.
+        // read-only and dry_run flags, the perception envelope flags, and the
+        // version. The command list is reflection-driven, so it must include the
+        // commands we exercise here and describe_capabilities itself, with the
+        // flags the dispatcher gates on. A client reads supports_dry_run before
+        // sending a preview, so a wrong flag here would cost source objects.
         try
         {
             var caps = DescribeCapabilities(new JObject());
@@ -1106,8 +1108,12 @@ public partial class RhinoMCPFunctions
                 throw new Exception("version is empty");
 
             var readOnly = new System.Collections.Generic.Dictionary<string, bool>();
+            var dryRun = new System.Collections.Generic.Dictionary<string, bool>();
             foreach (var c in cmds)
+            {
                 readOnly[c["name"].ToString()] = (bool)c["read_only"];
+                dryRun[c["name"].ToString()] = (bool)c["supports_dry_run"];
+            }
 
             if (!readOnly.ContainsKey("describe_capabilities") || !readOnly["describe_capabilities"])
                 throw new Exception("describe_capabilities should list itself as read_only");
@@ -1115,6 +1121,14 @@ public partial class RhinoMCPFunctions
                 throw new Exception("create_object should be present and not read_only");
             if (!readOnly.ContainsKey("get_document_summary") || !readOnly["get_document_summary"])
                 throw new Exception("get_document_summary should be present and read_only");
+
+            foreach (var booleanCmd in new[] { "boolean_union", "boolean_difference", "boolean_intersection" })
+            {
+                if (!dryRun.ContainsKey(booleanCmd) || !dryRun[booleanCmd])
+                    throw new Exception(booleanCmd + " should advertise supports_dry_run");
+            }
+            if (!dryRun.ContainsKey("create_object") || dryRun["create_object"])
+                throw new Exception("create_object should be present and not advertise supports_dry_run");
 
             bool hasDelta = false, hasHealth = false;
             foreach (var f in (JArray)caps["perception"]["envelope_flags"])
@@ -1493,6 +1507,222 @@ public partial class RhinoMCPFunctions
             results["boolean_intersection_rejects_non_brep"] = new JObject { ["status"] = "fail", ["error"] = e.Message };
         }
 
+        // Test: a dry_run boolean previews the result Brep's metrics and leaves
+        // the document untouched, then a real run on the same inputs commits.
+        // Two 10-unit boxes overlapping by 5 along X share full Y and Z extents,
+        // so their union is a single 15x10x10 solid (volume 1500); the prediction
+        // reports that count, solidity, and volume while adding and deleting
+        // nothing.
+        try
+        {
+            var pos = visualMode ? GetNextPosition() : new JArray { 230, 0, 0 };
+            var db1 = CreateObject(new JObject
+            {
+                ["type"] = "BOX",
+                ["name"] = "MCPDryRunBox1",
+                ["params"] = new JObject { ["width"] = 10, ["length"] = 10, ["height"] = 10 },
+                ["translation"] = pos
+            });
+            var pos2 = new JArray { ((JArray)pos)[0].ToObject<double>() + 5, ((JArray)pos)[1].ToObject<double>(), 0 };
+            var db2 = CreateObject(new JObject
+            {
+                ["type"] = "BOX",
+                ["name"] = "MCPDryRunBox2",
+                ["params"] = new JObject { ["width"] = 10, ["length"] = 10, ["height"] = 10 },
+                ["translation"] = pos2
+            });
+            string db1Id = db1["id"]?.ToString();
+            string db2Id = db2["id"]?.ToString();
+
+            var before = SnapshotObjectIds(doc);
+            var prediction = BooleanUnion(new JObject
+            {
+                ["object_ids"] = new JArray { db1Id, db2Id },
+                ["dry_run"] = true
+            });
+            var after = SnapshotObjectIds(doc);
+
+            bool predDryRun = prediction["dry_run"]?.ToObject<bool>() ?? false;
+            bool predWouldSucceed = prediction["would_succeed"]?.ToObject<bool>() ?? false;
+            bool predHasResultIds = prediction["result_ids"] != null;
+            int predCount = prediction["count"]?.ToObject<int>() ?? 0;
+            var predResults = prediction["results"] as JArray;
+            JObject predFirst = (predResults != null && predResults.Count > 0) ? (JObject)predResults[0] : null;
+            bool predValid = predFirst?["valid"]?.ToObject<bool>() ?? false;
+            bool predIsSolid = predFirst?["is_solid"]?.ToObject<bool>() ?? false;
+            bool predHasArea = predFirst?["area"] != null;
+            bool predHasBBox = predFirst?["bounding_box"] != null;
+            double predVolume = predFirst?["volume"]?.ToObject<double>() ?? 0;
+
+            bool inputsRemain = doc.Objects.Find(new Guid(db1Id)) != null
+                && doc.Objects.Find(new Guid(db2Id)) != null;
+            bool docUnchanged = before.SetEquals(after);
+
+            var real = BooleanUnion(new JObject
+            {
+                ["object_ids"] = new JArray { db1Id, db2Id },
+                ["name"] = "MCPDryRunUnionResult",
+                ["delete_sources"] = true
+            });
+            int realCount = real["count"]?.ToObject<int>() ?? 0;
+
+            DeleteObject(new JObject { ["name"] = "MCPDryRunUnionResult" });
+            if (doc.Objects.Find(new Guid(db1Id)) != null) DeleteObject(new JObject { ["id"] = db1Id });
+            if (doc.Objects.Find(new Guid(db2Id)) != null) DeleteObject(new JObject { ["id"] = db2Id });
+
+            if (!predDryRun)
+                throw new Exception("dry_run union response missing dry_run=true");
+            if (!predWouldSucceed)
+                throw new Exception("dry_run union did not report would_succeed");
+            if (predHasResultIds)
+                throw new Exception("dry_run union returned result_ids instead of a prediction");
+            if (predCount != 1)
+                throw new Exception($"dry_run union predicted count {predCount}, expected 1");
+            if (predFirst == null)
+                throw new Exception("dry_run union prediction had no result entry");
+            if (!predValid)
+                throw new Exception("dry_run union predicted an invalid result");
+            if (!predIsSolid)
+                throw new Exception("dry_run union predicted a non-solid result");
+            if (!predHasArea)
+                throw new Exception("dry_run union prediction missing area");
+            if (!predHasBBox)
+                throw new Exception("dry_run union prediction missing bounding_box");
+            if (Math.Abs(predVolume - 1500.0) > 1.0)
+                throw new Exception($"dry_run union predicted volume {predVolume}, expected ~1500");
+            if (!inputsRemain)
+                throw new Exception("dry_run union deleted an input");
+            if (!docUnchanged)
+                throw new Exception("dry_run union changed the document object set");
+            if (realCount != 1)
+                throw new Exception($"real union after dry_run created {realCount} object(s), expected 1");
+            results["boolean_dry_run_predicts_and_leaves_doc"] = new JObject { ["status"] = "pass", ["predicted_volume"] = predVolume };
+            VisualUpdate("dry_run union predicts metrics and leaves the document");
+        }
+        catch (Exception e)
+        {
+            results["boolean_dry_run_predicts_and_leaves_doc"] = new JObject { ["status"] = "fail", ["error"] = e.Message };
+        }
+
+        // Test: dry_run also previews difference and intersection without mutating
+        // the document, returning the same prediction envelope and no result_ids.
+        try
+        {
+            var pos = visualMode ? GetNextPosition() : new JArray { 250, 0, 0 };
+            var dBase = CreateObject(new JObject
+            {
+                ["type"] = "BOX",
+                ["name"] = "MCPDryRunDiffBase",
+                ["params"] = new JObject { ["width"] = 10, ["length"] = 10, ["height"] = 10 },
+                ["translation"] = pos
+            });
+            var dSub = CreateObject(new JObject
+            {
+                ["type"] = "SPHERE",
+                ["name"] = "MCPDryRunDiffSub",
+                ["params"] = new JObject { ["radius"] = 6 },
+                ["translation"] = pos
+            });
+            string dBaseId = dBase["id"]?.ToString();
+            string dSubId = dSub["id"]?.ToString();
+
+            var beforeDiff = SnapshotObjectIds(doc);
+            var diffPrediction = BooleanDifference(new JObject
+            {
+                ["base_id"] = dBaseId,
+                ["subtract_ids"] = new JArray { dSubId },
+                ["dry_run"] = true
+            });
+            var afterDiff = SnapshotObjectIds(doc);
+
+            bool diffDryRun = diffPrediction["dry_run"]?.ToObject<bool>() ?? false;
+            bool diffHasResultIds = diffPrediction["result_ids"] != null;
+            int diffCount = diffPrediction["count"]?.ToObject<int>() ?? 0;
+            var diffResults = diffPrediction["results"] as JArray;
+            bool diffHasBBox = diffResults != null && diffResults.Count > 0 && diffResults[0]["bounding_box"] != null;
+            bool diffDocUnchanged = beforeDiff.SetEquals(afterDiff);
+            bool diffInputsRemain = doc.Objects.Find(new Guid(dBaseId)) != null
+                && doc.Objects.Find(new Guid(dSubId)) != null;
+
+            var ipos = visualMode ? GetNextPosition() : new JArray { 270, 0, 0 };
+            var ib1 = CreateObject(new JObject
+            {
+                ["type"] = "BOX",
+                ["name"] = "MCPDryRunIntBox1",
+                ["params"] = new JObject { ["width"] = 10, ["length"] = 10, ["height"] = 10 },
+                ["translation"] = ipos
+            });
+            var ipos2 = new JArray { ((JArray)ipos)[0].ToObject<double>() + 5, ((JArray)ipos)[1].ToObject<double>(), 0 };
+            var ib2 = CreateObject(new JObject
+            {
+                ["type"] = "BOX",
+                ["name"] = "MCPDryRunIntBox2",
+                ["params"] = new JObject { ["width"] = 10, ["length"] = 10, ["height"] = 10 },
+                ["translation"] = ipos2
+            });
+            string ib1Id = ib1["id"]?.ToString();
+            string ib2Id = ib2["id"]?.ToString();
+
+            var beforeInt = SnapshotObjectIds(doc);
+            var intPrediction = BooleanIntersection(new JObject
+            {
+                ["object_ids"] = new JArray { ib1Id, ib2Id },
+                ["dry_run"] = true
+            });
+            var afterInt = SnapshotObjectIds(doc);
+
+            bool intDryRun = intPrediction["dry_run"]?.ToObject<bool>() ?? false;
+            bool intHasResultIds = intPrediction["result_ids"] != null;
+            int intCount = intPrediction["count"]?.ToObject<int>() ?? 0;
+            var intResults = intPrediction["results"] as JArray;
+            JObject intFirst = (intResults != null && intResults.Count > 0) ? (JObject)intResults[0] : null;
+            bool intIsSolid = intFirst?["is_solid"]?.ToObject<bool>() ?? false;
+            double intVolume = intFirst?["volume"]?.ToObject<double>() ?? 0;
+            bool intDocUnchanged = beforeInt.SetEquals(afterInt);
+            bool intInputsRemain = doc.Objects.Find(new Guid(ib1Id)) != null
+                && doc.Objects.Find(new Guid(ib2Id)) != null;
+
+            DeleteObject(new JObject { ["id"] = dBaseId });
+            DeleteObject(new JObject { ["id"] = dSubId });
+            DeleteObject(new JObject { ["id"] = ib1Id });
+            DeleteObject(new JObject { ["id"] = ib2Id });
+
+            if (!diffDryRun)
+                throw new Exception("dry_run difference missing dry_run=true");
+            if (diffHasResultIds)
+                throw new Exception("dry_run difference returned result_ids instead of a prediction");
+            if (diffCount < 1)
+                throw new Exception("dry_run difference predicted no result");
+            if (!diffHasBBox)
+                throw new Exception("dry_run difference prediction missing bounding_box");
+            if (!diffDocUnchanged)
+                throw new Exception("dry_run difference changed the document object set");
+            if (!diffInputsRemain)
+                throw new Exception("dry_run difference deleted an input");
+            if (!intDryRun)
+                throw new Exception("dry_run intersection missing dry_run=true");
+            if (intHasResultIds)
+                throw new Exception("dry_run intersection returned result_ids instead of a prediction");
+            if (intCount < 1)
+                throw new Exception("dry_run intersection predicted no result");
+            if (intFirst == null)
+                throw new Exception("dry_run intersection prediction had no result entry");
+            if (!intIsSolid)
+                throw new Exception("dry_run intersection predicted a non-solid result");
+            if (intVolume <= 0)
+                throw new Exception($"dry_run intersection predicted volume {intVolume}, expected a positive solid volume");
+            if (!intDocUnchanged)
+                throw new Exception("dry_run intersection changed the document object set");
+            if (!intInputsRemain)
+                throw new Exception("dry_run intersection deleted an input");
+            results["boolean_dry_run_difference_and_intersection"] = new JObject { ["status"] = "pass" };
+            VisualUpdate("dry_run difference and intersection preview without mutating");
+        }
+        catch (Exception e)
+        {
+            results["boolean_dry_run_difference_and_intersection"] = new JObject { ["status"] = "fail", ["error"] = e.Message };
+        }
+
         // Cleanup
         if (!visualMode)
         {
@@ -1537,6 +1767,13 @@ public partial class RhinoMCPFunctions
                 DeleteObject(new JObject { ["name"] = "MCPBoolRejectIntBox1" });
                 DeleteObject(new JObject { ["name"] = "MCPBoolRejectIntBox2" });
                 DeleteObject(new JObject { ["name"] = "MCPBoolRejectIntLine" });
+                DeleteObject(new JObject { ["name"] = "MCPDryRunBox1" });
+                DeleteObject(new JObject { ["name"] = "MCPDryRunBox2" });
+                DeleteObject(new JObject { ["name"] = "MCPDryRunUnionResult" });
+                DeleteObject(new JObject { ["name"] = "MCPDryRunDiffBase" });
+                DeleteObject(new JObject { ["name"] = "MCPDryRunDiffSub" });
+                DeleteObject(new JObject { ["name"] = "MCPDryRunIntBox1" });
+                DeleteObject(new JObject { ["name"] = "MCPDryRunIntBox2" });
             }
             catch
             {
