@@ -13,6 +13,6 @@ uv venv
 .venv/Scripts/activate
 uv pip install -e .
 
+# 开发调试（等价于 ./dev.sh）
 uv run mcp dev main.py:mcp
-
 ```
