@@ -1,173 +1,331 @@
-# RhinoMCP - Rhino Model Context Protocol Integration
+<div align="center">
 
-<img src="assets/rhinomcp_logo.svg" alt="RhinoMCP Logo" width="130">
+<img src="docs/assets/rhinomcp_logo.svg" alt="RhinoMCP Logo" width="140">
 
-RhinoMCP connects Rhino to AI agents through the Model Context Protocol (MCP), allowing AI agents to directly interact with and control Rhino. This integration enables prompt assisted 3D modeling in Rhino 3D.
+# RhinoMCP
 
-## Features
+**Control Rhino 3D and Grasshopper with AI, in plain language.**
 
-- **Two-way communication**: Connect AI agents to Rhino through a socket-based server
-- **Object manipulation**: Create, modify, and delete 3D objects in Rhino
-- **Document inspection**: Get detailed information about the current Rhino document
-- **Script execution**: Execute Rhinos python scripts in Rhino (experimental, may not work every time)
-- **Get Script Documentation**: Get the documentation of a specific RhinoScript python function
-- **Object selection**: Select objects based on filters, e.g. name, color, category, etc. with "and" or "or" logic
-- **Set/Create/Delete Layers**: Get or set the current layer, create new layers, or delete layers
+RhinoMCP connects Rhino to AI agents through the [Model Context Protocol](https://modelcontextprotocol.io),
+so assistants like Claude and Cursor can model geometry, read your document, and build
+Grasshopper definitions for you, just by chatting.
 
-> [!NOTE]  
-> So far the tool only supports creating primitive objects for proof of concept. More geometries will be added in the future.
-> Supported objects: Point, Line, Polyline, Circle, Arc, Ellipse, Curve, Box, Sphere, Cone, Cylinder, Surface (from points)
+[![PyPI](https://img.shields.io/pypi/v/rhinomcp?logo=pypi&logoColor=white&label=PyPI&color=3775A9)](https://pypi.org/project/rhinomcp/)
+[![Rhino 8](https://img.shields.io/badge/Rhino-8-178600?logo=rhinoceros&logoColor=white)](https://www.rhino3d.com/)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![MCP](https://img.shields.io/badge/MCP-Model_Context_Protocol-000000)](https://modelcontextprotocol.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Demo
+[Quick start](#quick-start) · [What it can do](#what-it-can-do) · [Usage](#usage) · [Examples](#example-prompts) · [Tool reference](#tool-reference)
 
-### Demo 1
+**English** · [简体中文](README.zh-CN.md)
 
-This demo shows how AI can interact with Rhino in two directions. Click the image below to watch the video.
+</div>
 
-[![demo2](assets/demo2.jpg)](https://youtu.be/pi6dbqUuhI4)
+---
 
-### Demo 2
+## Highlights
 
-This demo shows how to ask AI to create custom scripts and execute them in Rhino. Click the image below to watch the video.
+- Describe what you want and the assistant builds it in Rhino.
+- It reads your document and can capture the viewport, so it works from what is actually on screen.
+- It scripts Grasshopper for you: finding components, wiring them, setting sliders, and solving.
+- A single plugin and a single config entry cover both Rhino and Grasshopper.
+- When you need more control, it can run native Rhino commands, RhinoScript-Python, or RhinoCommon C#.
 
-[![demo1](assets/demo1.jpg)](https://youtu.be/NFOF_Pjp3qY)
+> [!NOTE]
+> RhinoMCP targets **Rhino 8** on Windows and macOS.
 
-## Tutorial
+## Demos
 
-Thanks to Nate. He has created a showcase and installation [tutorial](https://www.youtube.com/watch?v=z2IBP81ABRM) for this tool.
+<table>
+<tr>
+<td width="50%" align="center">
 
-## Components
+[![Two-way interaction demo](docs/assets/demo2.jpg)](https://youtu.be/pi6dbqUuhI4)
 
-The system consists of two main components:
+**Two-way interaction:** the AI both creates and reads geometry.
 
-1. **MCP Server (`src/rhino_mcp_server/server.py`)**: A Python server that implements the Model Context Protocol and connects to the Rhino plugin
-2. **Rhino Plugin (`src/rhino_mcp_plugin`)**: A Rhino plugin that creates a socket server within Rhino to receive and execute commands
+</td>
+<td width="50%" align="center">
 
-## Installation
+[![Custom script demo](docs/assets/demo1.jpg)](https://youtu.be/NFOF_Pjp3qY)
 
-### Prerequisites
+**Custom scripts:** the AI writes and runs scripts inside Rhino.
 
-- Rhino 7 or newer (Works onWindows and Mac); make sure you Rhino is up to date.
-- Python 3.10 or newer
-- uv package manager
+</td>
+</tr>
+</table>
 
-**⚠️ Only run one instance of the MCP server (either on Cursor or Claude Desktop), not both**
+Prefer a walkthrough? Nate made a showcase and install [tutorial on YouTube](https://www.youtube.com/watch?v=z2IBP81ABRM).
 
-### Installing the Rhino Plugin
+## What it can do
 
-1. Go to Tools > Package Manager
-2. Search for `rhinomcp`
-3. Click `Install`
+### <img width="30" height="30" src="https://img.icons8.com/color/48/rhinoceros-6.png" alt="rhinoceros-6"/> Rhino
 
-#### Install uv
+| Area                | What the AI can do                                                                                                                     |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Create geometry     | Points, lines, polylines, circles, arcs, ellipses, curves, boxes, spheres, cones, cylinders, and surfaces, one at a time or in batches |
+| Transform & edit    | Move, rotate, scale, recolor, rename, and delete objects                                                                               |
+| Advanced modeling   | Loft, extrude, sweep, offset, pipe; boolean union, difference, and intersection                                                        |
+| Curve operations    | Project, intersect, and split curves                                                                                                   |
+| Layers & attributes | Create, delete, and switch layers; read and write object attributes                                                                    |
+| Inspect & select    | Document summaries, object info, and filtered selection (by name, color, or category, with AND / OR logic)                             |
+| See the model       | Capture the viewport so the AI gets visual feedback                                                                                    |
+| Analyze             | Measure length, area, volume, bounding boxes, and more                                                                                 |
+| Go deeper           | Run any Rhino command, execute RhinoScript-Python, or run RhinoCommon C#, with built-in RhinoScript docs lookup                        |
 
-**If you're on Mac, please install uv as**
+### <img width="30" height="30" src="https://img.icons8.com/officel/80/grasshopper.png" alt="grasshopper"/> Grasshopper
 
-```bash
-brew install uv
+| Area              | What the AI can do                                                                                    |
+| ----------------- | ----------------------------------------------------------------------------------------------------- |
+| Find components   | Search the installed component library and inspect a component's inputs and outputs before placing it |
+| Build canvases    | Add, position, lay out, update, and delete components                                                 |
+| Wire it up        | Connect and disconnect parameters between components                                                  |
+| Set & read values | Drive sliders, toggles, panels, and value lists; read structured data back out of outputs             |
+| Solve             | Run the solution and surface runtime warnings and errors                                              |
+| Build in one shot | Construct and wire a whole graph, or mutate an existing one, in a single batched operation            |
+
+## Quick start
+
+Three steps: install the Rhino plugin, connect your AI client, then start the bridge in Rhino.
+
+### 1. Install the Rhino plugin
+
+In Rhino, open **Tools → Package Manager**, search for **`rhinomcp`**, and click **Install**. Restart Rhino.
+
+### 2. Connect your AI client
+
+#### Option A: ask your AI assistant to install it (recommended)
+
+If you use an agentic assistant (Codex, Claude Code, Cursor, Cline, and the like), paste this prompt:
+
+```
+Please install https://github.com/jingcheng-chen/rhinomcp as a local MCP server named `rhino`.
 ```
 
-**On Windows**
+#### Option B: Install the mcp server or manually edit the config yourself
+
+**Codex**, in one command:
 
 ```bash
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+codex mcp add rhino --env RHINO_MCP_HOST=127.0.0.1 -- uvx rhinomcp
 ```
 
-**⚠️ Do not proceed before installing UV**
+**Claude Code**, in one command:
 
-### Config file
+```bash
+claude mcp add rhino -- uvx rhinomcp
+```
+
+**ChatGPT:** use Codex for the local setup above. ChatGPT apps/MCP connectors currently connect
+to remote MCP servers, not local stdio commands like `uvx rhinomcp`. If you want to build a
+ChatGPT app around RhinoMCP, use ChatGPT developer mode with a remote or tunneled MCP endpoint.
+
+You can also manually edit the config yourself:
 
 ```json
 {
   "mcpServers": {
     "rhino": {
       "command": "uvx",
-      "args": ["rhinomcp"]
+      "args": ["rhinomcp"],
+      "env": {
+        "RHINO_MCP_HOST": "127.0.0.1"
+      }
     }
   }
 }
 ```
 
-### Claude for Desktop Integration
+> [!IMPORTANT]
+> The launcher `uvx` comes from [**uv**](https://docs.astral.sh/uv/). If you don't have it yet:
+> macOS `brew install uv` · Windows `powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`
+>
+> Run **only one** RhinoMCP server at a time (Codex, Claude, Cursor, etc. — not several at once).
 
-Go to Claude > Settings > Developer > Edit Config > claude_desktop_config.json to include the above config file.
+<details>
+<summary>Auto-restart the server with your AI client (optional)</summary>
 
-### Cursor integration
+To clean up a stale `rhinomcp` process each time your client launches:
 
-Make sure your cursor is up to date.
+**macOS / Linux**
 
-Create a folder `.cursor` in your project root.
+```json
+{
+  "mcpServers": {
+    "rhino": {
+      "command": "sh",
+      "args": ["-c", "killall rhinomcp 2>/dev/null; uvx rhinomcp"]
+    }
+  }
+}
+```
 
-Create a file `mcp.json` in the `.cursor` folder and include the above config file:
+**Windows**
 
-Go to Cursor Settings > MCP and check if it's enabled.
+```json
+{
+  "mcpServers": {
+    "rhino": {
+      "command": "cmd",
+      "args": ["/c", "taskkill /F /IM rhinomcp.exe 2>nul & uvx rhinomcp"]
+    }
+  }
+}
+```
+
+</details>
+
+### 3. Start the Rhino bridge
+
+With Rhino open, type **`mcpstart`** in the command line. This starts the TCP bridge the server
+connects to (`mcpstop` ends it). Run it once per Rhino session.
 
 ## Usage
 
-### Starting the Connection
+With the bridge running and your client connected, you'll see the RhinoMCP tools. From there, just
+chat: ask the assistant to model something, inspect your scene, or build a Grasshopper graph.
 
-![RhinoMCP in the command line](assets/rhino_plugin_instruction.jpg)
+<img src="docs/assets/rhino_plugin_instruction.jpg" alt="mcpstart in the Rhino command line"></td>
+<img src="docs/assets/claude_example.jpg" alt="RhinoMCP tools in Claude"></td>
 
-1. In Rhino, type `mcpstart` in the command line
-2. Make sure the MCP server is running in the rhino terminal
+For Grasshopper, you only need Rhino open with `mcpstart` running. The assistant can open or create
+the Grasshopper document itself, then build the definition. For example: _"create a point attractor
+pattern with cylinders that have different heights."_
 
-### Using with Claude
+## Example prompts
 
-Once the config file has been set on Claude, and the plugin is running on Rhino, you will see a hammer icon with tools for the RhinoMCP.
+> Create 6×6×6 boxes on a 10-unit grid from the origin, sizes ramping from 1 to 5,
+> with a blue-to-red gradient color based on size. Use RhinoScript Python.
 
-![RhinoMCP in Claude](assets/claude_enable_instruction.jpg)
+> Make a Rhinoceros animal out of cubic blocks in cartoon colors. Then change its head to red,
+> and rotate the selected object 90° around the Z axis.
 
-### Using with Cursor
+> Create a point attractor pattern in Grasshopper: a grid of cylinders whose heights change with
+> their distance from an attractor point, with a slider to move the point.
 
-Once the config file has been set on Cursor, and the plugin is running on Rhino, you will see the green indicator in front of the MCP server.
+## Tool reference
 
-![RhinoMCP in Cursor](assets/cursor_enable_instruction.jpg)
+<details>
+<summary><b>Rhino tools</b></summary>
 
-If not, try refresh the server in Cursor. If any console pops up, please do not close it.
+| Tool                                                                                                          | Purpose                                                |
+| ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| `create_object` / `create_objects`                                                                            | Create one or many objects                             |
+| `modify_object` / `modify_objects`                                                                            | Transform or edit one or many objects                  |
+| `delete_object`                                                                                               | Delete an object                                       |
+| `boolean_union` / `boolean_difference` / `boolean_intersection`                                               | Boolean operations                                     |
+| `loft` / `extrude_curve` / `sweep1` / `offset_curve` / `pipe`                                                 | Advanced surface and solid modeling                    |
+| `project_curve` / `intersect_curves` / `split_curve`                                                          | Curve operations                                       |
+| `analyze_objects`                                                                                             | Measure length, area, volume, bounding boxes, and more |
+| `select_objects`                                                                                              | Select by filters (name, color, category; AND / OR)    |
+| `get_objects` / `get_object_info` / `get_selected_objects_info`                                               | Query objects                                          |
+| `get_object_attributes` / `update_object_attributes`                                                          | Read and write object attributes                       |
+| `create_layer` / `delete_layer` / `get_or_set_current_layer`                                                  | Layer management                                       |
+| `get_document_summary`                                                                                        | Overview of the current document                       |
+| `capture_viewport`                                                                                            | Screenshot the viewport for visual feedback            |
+| `run_command`                                                                                                 | Run any native Rhino command                           |
+| `execute_rhinoscript_python_code`                                                                             | Execute RhinoScript-Python                             |
+| `execute_rhinocommon_csharp_code`                                                                             | Execute RhinoCommon C#                                 |
+| `search_rhinoscript_functions` / `get_rhinoscript_docs` / `list_rhinoscript_modules` / `get_module_functions` | RhinoScript API docs lookup                            |
+| `get_commands`                                                                                                | List available commands                                |
+| `undo` / `redo`                                                                                               | Undo and redo                                          |
 
-Once it's ready, use `Ctrl+I` to open the chat box and start chatting with Rhino. Make sure you've selected **Agent** mode.
+</details>
 
-![RhinoMCP in Cursor](assets/cursor_usage_instruction.jpg)
+<details>
+<summary><b>Grasshopper tools</b></summary>
 
-## Technical Details
+| Tool                                                                  | Purpose                                           |
+| --------------------------------------------------------------------- | ------------------------------------------------- |
+| `gh_create_document` / `gh_get_document_info` / `gh_get_canvas_state` | Document and canvas inspection                    |
+| `gh_search_components` / `gh_batch_search_components`                 | Search the component library                      |
+| `gh_list_component_categories` / `gh_get_available_components`        | Browse installed components                       |
+| `gh_get_component_type_info` / `gh_get_component_info`                | Inspect a component type or instance              |
+| `gh_list_components`                                                  | List components on the canvas                     |
+| `gh_add_component` / `gh_update_component` / `gh_delete_component`    | Add, update, or delete components                 |
+| `gh_layout_components`                                                | Auto-lay-out the canvas                           |
+| `gh_clear_canvas`                                                     | Clear the canvas                                  |
+| `gh_connect_components` / `gh_disconnect_components`                  | Wire or unwire parameters                         |
+| `gh_set_parameter_value` / `gh_get_parameter_value`                   | Drive inputs, read outputs                        |
+| `gh_run_solution` / `gh_expire_solution`                              | Solve or expire the solution                      |
+| `gh_build_graph` / `gh_mutate_graph`                                  | Build or mutate a whole graph in one batched call |
+| `gh_get_graph` / `gh_clear_graph`                                     | Inspect or clear objects by graph id              |
 
-### Communication Protocol
+</details>
 
-The system uses a simple JSON-based protocol over TCP sockets:
+## How it works
 
-- **Commands** are sent as JSON objects with a `type` and optional `params`
-- **Responses** are JSON objects with a `status` and `result` or `message`
-
-## Limitations & Security Considerations
-
-- The `get_document_info` only fetches max 30 objects, layers, material etc. to avoid huge dataset that overwhelms Claude.
-- Complex operations might need to be broken down into smaller steps
-
-## Building the tool and publishing
-
-### Building and publishing the server
-
-```bash
-cd rhino_mcp_server
-uv build
-uv publish
+```
+AI client ──MCP (stdio)──► rhinomcp (Python) ──TCP 127.0.0.1:1999──► Rhino plugin ──► Rhino + Grasshopper
 ```
 
-### Building and publishing the plugin
+1. `server/`: a Python [FastMCP](https://modelcontextprotocol.io) server that exposes each tool and forwards it to Rhino.
+2. `plugin/`: a RhinoCommon C# plugin that runs a TCP listener inside Rhino and executes commands on the main thread. Start and stop it with the `mcpstart` / `mcpstop` Rhino commands.
+3. `contracts/`: JSON Schema definitions that keep the wire protocol between the two tiers in sync.
 
-1. build the tool in Release mode
-2. copy the "manifest.yml" file to the "bin/Release" folder
-3. run `yak build` in the Release folder
-4. run `yak push rhino_mcp_plugin_xxxx.yak` to publish the plugin
+`IMPLEMENTATION.md` has a deeper tour of the code.
+
+## Security
+
+The Python server and the Rhino plugin talk over an unauthenticated TCP loopback link
+(`127.0.0.1:1999`). Tools such as `run_command`, `execute_rhinoscript_python_code`, and
+`execute_rhinocommon_csharp_code` give the model an open execution surface inside Rhino. This is
+fine for local agent use. Do not expose it beyond the loopback interface without adding
+authentication.
+
+<details>
+<summary>Operator switches (environment variables)</summary>
+
+| Variable                       | Default     | Effect                                                                        |
+| ------------------------------ | ----------- | ----------------------------------------------------------------------------- |
+| `RHINO_MCP_HOST`               | `127.0.0.1` | Connect target. Refuses non-loopback hosts unless `RHINO_MCP_ALLOW_REMOTE=1`. |
+| `RHINO_MCP_PORT`               | `1999`      | TCP port.                                                                     |
+| `RHINO_MCP_ENABLE_RUN_COMMAND` | `1`         | Set `0` to disable the `run_command` tool.                                    |
+| `RHINO_MCP_ENABLE_RHINOSCRIPT` | `1`         | Set `0` to disable RhinoScript-Python execution.                              |
+| `RHINO_MCP_ENABLE_CSHARP`      | `1`         | Set `0` to disable RhinoCommon C# execution.                                  |
+| `RHINO_MCP_VALIDATE`           | `warn`      | Pre-flight schema validation: `off` / `warn` / `strict`.                      |
+| `RHINO_MCP_TIMEOUT`            | `15.0`      | Socket timeout in seconds.                                                    |
+| `RHINO_MCP_DEBUG`              | `0`         | Verbose logging.                                                              |
+
+</details>
+
+## For developers
+
+<details>
+<summary>Build, test, and publish</summary>
+
+**Python server** (run from `server/`)
+
+```bash
+uv venv && uv pip install -e ".[dev]"   # set up
+uv run pytest                            # run tests (no Rhino needed; uses a mock server)
+uv run ruff check src/rhinomcp           # lint
+uv run python ../contracts/test_schemas.py   # validate JSON schemas
+uv build && uv publish                   # publish to PyPI
+```
+
+**C# plugin**
+
+```bash
+dotnet restore plugin/rhinomcp.sln
+dotnet build plugin/rhinomcp.sln --configuration Release
+```
+
+To publish the plugin: build in Release, copy `manifest.yml` into `bin/Release`, then run
+`yak build` and `yak push rhinomcp_xxxx.yak`.
+
+</details>
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome. Feel free to open an issue or submit a pull request.
 
 ## Disclaimer
 
-This is a third-party integration and not made by Mcneel. Made by [Jingcheng Chen](https://github.com/jingcheng-chen)
+This is a third-party integration and is not made by McNeel. Built by
+[Jingcheng Chen](https://github.com/jingcheng-chen).
 
-## Star History
+## Star history
 
 [![Star History Chart](https://api.star-history.com/svg?repos=jingcheng-chen/rhinomcp&type=Date)](https://www.star-history.com/#jingcheng-chen/rhinomcp&Date)
